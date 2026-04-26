@@ -7,9 +7,7 @@
 // Bound the shared_exp based on ebits
 //-----------------------------------------------------------------------
 __host__ __device__ __forceinline__
-int clamp_shared_exp(
-    int shared_exp,
-    const int ebits
+int clamp_shared_exp(int shared_exp, const int ebits
 ) {
     // Set overflowing shared exps to NaN and
     // bound underflowing shared exps to -emax
@@ -25,11 +23,7 @@ int clamp_shared_exp(
 // Compute shared scale for MX
 //-----------------------------------------------------------------------
 __host__ __device__ __forceinline__
-float mx_get_shared_scale(
-    int shared_exp,
-    const int scale_bits,
-    const float elem_max_norm
-) {
+float mx_get_shared_scale(int shared_exp, const int scale_bits, const float elem_max_norm) {
     // Offset shared exponent by elem_emax, preserve NaNs
     const int elem_emax = get_unbiased_exponent(elem_max_norm);
     shared_exp = (shared_exp != FLOAT32_EXP_MAX) ? \
