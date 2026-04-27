@@ -507,11 +507,12 @@ float block_abs_max(const std::vector<float>& block) {
 // 并刻意放入负数、零、次正规数、大数和普通小数，方便观察不同量化行为。
 std::vector<float> make_demo_block() {
     std::vector<float> block(32, 0.0f);
+    
     // block[0] = 1000.0f;       // 展示 scale > 1 以及饱和。
-    block[0] = -2.7f;         // 展示负数舍入。
+    block[0] = 300.5f;        // 展示大数舍入。
     block[1] = -15.25f;       // 展示符号位处理。
     block[2] = 1.0e-40f;      // 展示 FP32 次正规数输入。
-    block[3] = 300.5f;        // 展示大数舍入。
+    block[3] = -2.7f;         // 展示负数舍入。
     block[4] = -0.03125f;     // 展示小正规数。
     block[5] = 0.0f;          // 展示精确零。
     block[6] = 1.2f;          // 展示普通非精确可表示值。
