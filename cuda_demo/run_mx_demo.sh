@@ -11,7 +11,7 @@
 set -e  # 遇到错误立即退出
 
 echo "=== 编译 mx_demo.cpp ==="
-g++ mx_demo.cpp -o mx_demo.out -std=c++11
+g++ mx_demo_complete.cpp -o mx_demo.out -std=c++11
 
 echo ""
 echo "=== 编译成功，开始运行 ==="
