@@ -27,6 +27,13 @@ We recommend using [Nvidia-PyTorch Container](https://catalog.ngc.nvidia.com/org
 
 CUDA is required (11.3+ recommended).
 For Python packages see ```requirements.txt```.
+## Install 
+
+```shell
+pip install torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cu121
+
+pip install -e .
+```
 
 ## Trademark Notice ##
 **Trademarks** This project may contain trademarks or logos for projects, products,
