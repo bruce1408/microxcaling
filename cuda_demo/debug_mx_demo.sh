@@ -20,13 +20,13 @@ BUILD_DIR="./build_debug"
 case "$MODE" in
     run)
         echo "=== [普通模式] 编译并运行 ==="
-        g++ mx_demo.cpp -o mx_demo.out -std=c++11 -g
+        g++ mx_demo_complete.cpp -o mx_demo.out -std=c++11 -g
         ./mx_demo.out
         ;;
 
     gdb)
         echo "=== [GDB 模式] 编译带调试符号的版本 ==="
-        g++ mx_demo.cpp -o mx_demo_debug.out -std=c++11 -g -O0
+        g++ mx_demo_complete.cpp -o mx_demo_debug.out -std=c++11 -g -O0
         echo ""
         echo "启动 GDB 交互式调试..."
         echo "GDB 常用命令:"
@@ -47,7 +47,7 @@ case "$MODE" in
     printf)
         echo "=== [Printf 模式] 编译带详细打印的版本 ==="
         # 编译时定义 DEBUG_PRINT 宏，启用代码中的调试打印
-        g++ mx_demo.cpp -o mx_demo_printf.out -std=c++11 -g -DDEBUG_PRINT
+        g++ mx_demo_complete.cpp -o mx_demo_printf.out -std=c++11 -g -DDEBUG_PRINT
         echo ""
         echo "运行带详细调试信息的版本:"
         echo "----------------------------------------"
@@ -56,7 +56,7 @@ case "$MODE" in
 
     asan)
         echo "=== [ASan 模式] 编译带 AddressSanitizer 的版本 ==="
-        g++ mx_demo.cpp -o mx_demo_asan.out -std=c++11 -g -fsanitize=address -fno-omit-frame-pointer
+        g++ mx_demo_complete.cpp -o mx_demo_asan.out -std=c++11 -g -fsanitize=address -fno-omit-frame-pointer
         echo ""
         echo "运行带 AddressSanitizer 的版本:"
         echo "----------------------------------------"
@@ -65,7 +65,7 @@ case "$MODE" in
 
     clean)
         echo "=== 清理编译产物 ==="
-        rm -f mx_demo.out mx_demo_debug.out mx_demo_printf.out mx_demo_asan.out
+        rm -f mx_demo_complete.out mx_demo_debug.out mx_demo_printf.out mx_demo_asan.out
         rm -rf "$BUILD_DIR"
         echo "清理完成"
         ;;

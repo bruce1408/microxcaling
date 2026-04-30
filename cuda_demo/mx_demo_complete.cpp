@@ -275,7 +275,7 @@ int clamp_shared_exp(int shared_exp, int ebits) {
 // 再减去目标元素格式最大值的指数，得到一个 2 的幂次 scale。
 // 这种设计便于硬件实现: 每个 block 共享一个 E8M0 scale，每个元素只需做指数对齐。
 float mx_get_shared_scale(int shared_exp, int scale_bits, float elem_max_norm) {
-    const int elem_emax = get_unbiased_exponent(elem_max_norm);
+    const int elem_emax = get_unbiased_exponent(elem_max_norm);  // 8
     shared_exp = shared_exp != FLOAT32_EXP_MAX ? shared_exp - elem_emax : shared_exp;
     shared_exp = clamp_shared_exp(shared_exp, scale_bits);
 
@@ -587,19 +587,21 @@ void print_quantized_table(const std::vector<QuantizedElement>& rows) {
 
 // 程序入口: 串联完整 MXFP8 量化演示流程。
 int main() {
-    // 本演示固定使用 FP8_E4M3 作为元素格式，scale 使用 E8M0。
+    // 本演示固定使用 FP8_E4M3 作为元素格式，scale 使用 E8M0。获取已经定义好的结构体
     const FormatParams elem_format = get_format_params(ElemFormat::fp8_e4m3);
-    const int scale_bits = 8;
+    const int scale_bits = 8; // 表示当前的scale的缩放格式是E8M0
     const RoundingMode rounding_mode = RoundingMode::round_away_from_zero;
     const bool flush_fp32_subnorms = false;
 
     // 1. 构造一个 block，并计算 block 级别 abs max。
     const std::vector<float> block = make_demo_block();
     const float abs_max = block_abs_max(block);
-    // 2. 从 abs max 中提取 shared exponent，作为计算 shared scale 的基础。
+    
+    // 2. 从 abs max 中提取 shared exponent，作为计算 shared scale 的基础。 这里实际就是带偏置的 127 + 8 =  135
     const int shared_exp = get_biased_exponent(abs_max);
     const bool flush_tile = shared_exp == 0 && flush_fp32_subnorms;
-    // 3. 根据 shared exponent 和元素格式最大值，生成 E8M0 shared scale。
+
+    // 3. 根据 shared exponent 和元素格式最大值，生成 E8M0 shared scale。 scale = 1
     const float scale = mx_get_shared_scale(shared_exp, scale_bits, elem_format.max_norm);
 
     // 4. 对 block 内每个元素执行共享 scale 下的逐元素量化。
