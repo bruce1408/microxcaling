@@ -544,11 +544,335 @@ KERNEL reduce_max_kernel(in[], total_size, inner_dim_size, out[]):
 
 ## 8. 关键优化总结
 
-| 技术 | 目的 | 实现 |
-|---|---|---|
-| **`__shfl_xor_sync` 蝴蝶网络** | Warp 内零开销 allreduce 求 max | 5 轮寄存器交换 (tile=32) |
-| **预计算 max_values** | 分离 max 求值 + 量化，提高 occupancy | `reduce_max_inner_dim` kernel |
-| **1 线程 / tile** | 通用路径，任意 tile_size/axis | `quantize_mx_by_tile_cuda_kernel` |
-| **尾数 bitwise 操作** | 无需查表或 FPU，所有格式通用 | `shift_right_round_mantissa` + `shift_left_mantissa` |
-| **rd_away / rd_even** | 两种舍入模式 | tie/even 位检测后决定是否 +1 |
-| **`__host__ __device__`** | 同一份代码同时支持 GPU 和 CPU fallback | `quantize_elemwise` / `mx_get_shared_scale` 等 |
+
+| 技术                         | 目的                           | 实现                                                   |
+| -------------------------- | ---------------------------- | ---------------------------------------------------- |
+| `**__shfl_xor_sync` 蝴蝶网络** | Warp 内零开销 allreduce 求 max    | 5 轮寄存器交换 (tile=32)                                   |
+| **预计算 max_values**         | 分离 max 求值 + 量化，提高 occupancy  | `reduce_max_inner_dim` kernel                        |
+| **1 线程 / tile**            | 通用路径，任意 tile_size/axis       | `quantize_mx_by_tile_cuda_kernel`                    |
+| **尾数 bitwise 操作**          | 无需查表或 FPU，所有格式通用             | `shift_right_round_mantissa` + `shift_left_mantissa` |
+| **rd_away / rd_even**      | 两种舍入模式                       | tie/even 位检测后决定是否 +1                                 |
+| `**__host__ __device__`**  | 同一份代码同时支持 GPU 和 CPU fallback | `quantize_elemwise` / `mx_get_shared_scale` 等        |
+
+
+## 9. 核心概念：三维分解 (内存布局)
+
+代码把任意 N 维 tensor 在逻辑上分解为三个区域：
+
+```
+输入 shape: [D₀, D₁, ..., Dₙ₋₁]
+指定共享指数 axis = a
+
+pre_axis_size  = D₀ × D₁ × ... × Dₐ₋₁       // axis 之前的维度乘积
+axis_size      = Dₐ                            // 共享指数所在维度
+post_axis_size = Dₐ₊₁ × ... × Dₙ₋₁            // axis 之后的维度乘积
+```
+
+这三个量决定了**哪个元素和哪个元素共享同一个指数**：
+
+> **共享规则**: 索引 `(pre_axis_i, post_axis_i)` 相同的所有元素共享一个指数
+> 即固定 axis 之前和之后的所有坐标，沿 axis 方向的所有元素属于一个 block
+
+**线性内存索引公式** (row-major):
+
+```
+linear_idx = pre_axis_i × (axis_size × post_axis_size)
+           + k × post_axis_size          // k = 0..axis_size-1, 沿 axis 方向
+           + post_axis_i
+```
+
+---
+
+## 10. 具体例子可视化
+
+### 例 1: 2D Tensor — `shape=[4, 12]`, `axis=1`, `tile_size=4`
+
+```
+pre_axis_size = 4       (dim 0)
+axis_size     = 12      (dim 1)
+post_axis_size = 1      (无后续维度)
+num_tiles     = 12/4 = 3
+```
+
+**内存布局与共享指数分配**:
+
+```
+                  axis=1 (dim 1, 12 列)
+               ├── tile 0 ──┤├── tile 1 ──┤├── tile 2 ──┤
+               k=0  1  2  3  4  5  6  7  8  9 10 11
+      ┌───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┐
+i=0   │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │  ← pre_axis_i=0, post_axis_i=0
+      ├───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┤
+i=1   │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │  ← pre_axis_i=1, post_axis_i=0
+      ├───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┤
+i=2   │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │  ← pre_axis_i=2, post_axis_i=0
+      ├───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┤
+i=3   │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │ ● │  ← pre_axis_i=3, post_axis_i=0
+      └───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘
+```
+
+- 同一行 (pre_axis_i 相同) 具有相同的 `post_axis_i=0`
+- **同一行内每 4 个元素 (一个 tile) 共享一个指数**
+- `total_tiles = 4 × 3 = 12`，kernel 启动 12 个线程，每个线程处理一行中的一个 tile
+
+**线性内存** (row-major, FP32 每个 4 字节):
+
+```
+offset: 0   1   2   3 | 4   5   6   7 | 8   9   10  11 | 12  13  14  15 | ...
+       [0,0][0,1][0,2][0,3] [0,4][0,5][0,6][0,7] [0,8][0,9][0,10][0,11]
+                        [1,0][1,1][1,2][1,3] ...
+       ├── tile 0 ──────┤ ├── tile 1 ──────┤ ├── tile 2 ────────┤
+```
+
+**关键观察**: 当 `post_axis_size=1` (axis=1, ndim=2) 时，tile 内的元素**在内存中是连续排列的**。
+
+### 例 2: 3D Tensor — `shape=[3, 128, 256]`, `axis=1`, `tile_size=32`
+
+```
+pre_axis_size     = 3          (dim 0)
+axis_size         = 128        (dim 1)
+post_axis_size    = 256        (dim 2)
+num_tiles         = 128/32 = 4
+total_tiles       = 3 × 4 × 256 = 3072
+```
+
+**可视化**:
+
+```
+                       axis=1 (dim 1, 共享指数方向, 128 个元素)
+             ├────── tile 0 (i1=0..31) ──────┤├── tile 1 ──┤...
+
+post_axis (dim 2, 256) ──────┐
+                             │
+                  ┌──────────┬──────────┬──────────┬──────
+                  │[0,0,0]   │[0,0,1]   │[0,0,2]   │...  ← pre_axis=0, i1=0
+                  │[0,1,0]   │[0,1,1]   │[0,1,2]   │...  ← pre_axis=0, i1=1
+                  │...       │...       │...       │
+                  │[0,31,0]  │[0,31,1]  │[0,31,2]  │...  ← pre_axis=0, i1=31
+                  ├──────────┼──────────┼──────────┼──────  ← tile 0 结束
+                  │[0,32,0]  │[0,32,1]  │[0,32,2]  │...  ← tile 1 开始
+                  └──────────┴──────────┴──────────┴──────
+```
+
+**线性内存** (row-major):
+
+```
+offset 0:      [0,0,0]
+offset 1:      [0,0,1]
+...
+offset 255:    [0,0,255]    ← 完成 pre_axis=0, axis=0, 所有 post_axis
+offset 256:    [0,1,0]      ← axis 方向走一步
+offset 257:    [0,1,1]
+...
+offset 511:    [0,1,255]
+...
+offset 7936:   [0,31,0]     ← tile 0 的最后一行开始
+...
+offset 8191:   [0,31,255]   ← tile 0 结束
+offset 8192:   [0,32,0]     ← tile 1 开始
+```
+
+**关键观察**: 同一个 tile 内，沿 axis 方向相邻的元素 `[0,k,0]` 和 `[0,k+1,0]` 在内存中相距 `post_axis_size=256` 个元素，即 **tile 内元素在内存中是步长为 `post_axis_size` 的非连续访问**。
+
+---
+
+## 11. 每个 kernel 的线程-数据映射
+
+### Kernel A: `quantize_mx_innermost_cuda_kernel` (快速路径)
+
+**适用**: `axis == ndim-1` (innermost dim)，即 `post_axis_size == 1`
+
+```
+例: shape=[4, 12], axis=1, tile_size=4
+
+线程映射:
+  block 0, warp 0:  thread 0..3  →  offset 0..3  → [0,0..3] (tile 0, 行 0)
+                     thread 4..7  →  offset 4..7  → [0,4..7] (tile 1, 行 0)
+                     thread 8..11 →  offset 8..11 → [0,8..11](tile 2, 行 0)
+  block 0, warp 1:  thread 0..3  →  offset 12..15→ [1,0..3] (tile 0, 行 1)
+                     ...
+
+内存访问模式:
+  warp 0 的 thread 0..3 读取 offset 0,1,2,3 → 连续 16 字节 → 合并访问 (coalesced) ✓
+  warp 0 的 thread 4..7 读取 offset 4,5,6,7 → 也是连续 ✓
+```
+
+`__shfl_xor_sync` 在 warp 内做 allreduce，因为 `tile_size=4`，warp 内 4 个线程 (0-3) 一起归约求 tile 最大，后 4 个线程 (4-7) 做另一个 tile 的归约。
+
+**内存优势**: `post_axis_size=1` → tile 内元素**连续排列** → GPU 全局内存**合并访问**
+
+### Kernel B: `quantize_mx_by_tile_cuda_kernel` (通用路径)
+
+**适用**: `axis` 非 innermost 或 tile_size > 32 等
+
+```
+例: shape=[3, 128, 256], axis=1, tile_size=32
+
+线程映射: 1 线程 / tile
+  total_tiles = 3 × 4 × 256 = 3072
+
+  线程 0:  pre_axis_i=0, num_tiles_i=0, post_axis_i=0
+           → 管理 [0, 0..31, 0] 共 32 个元素
+  线程 1:  pre_axis_i=0, num_tiles_i=0, post_axis_i=1
+           → 管理 [0, 0..31, 1] 共 32 个元素
+  ...
+  线程 255: pre_axis_i=0, num_tiles_i=0, post_axis_i=255
+           → 管理 [0, 0..31, 255]
+  线程 256: pre_axis_i=0, num_tiles_i=1, post_axis_i=0
+           → 管理 [0, 32..63, 0]
+```
+
+**线程索引到 tile 的映射公式** (`mx.cuh:118-120`):
+
+```cpp
+post_axis_i   = offset % post_axis_size           // = offset % 256
+num_tiles_i   = (offset / post_axis_size) % num_tiles  // = (offset/256) % 4
+pre_axis_i    = offset / (num_tiles × post_axis_size)  // = offset / 1024
+```
+
+**tile 内元素的内存地址** (`mx.cuh:133-135`):
+
+```cpp
+in_i = pre_axis_i × axis_size × post_axis_size     // 行基址
+     + (num_tiles_i × tile_size + i) × post_axis_size  // tile 内第 i 个元素沿 axis 的偏移
+     + post_axis_i                                    // post_axis 偏移
+```
+
+对于 `[0, 0..31, 0]` (pre=0, tile=0, post=0):
+
+```
+i=0: 0 × 32768 + (0 × 32 + 0) × 256 + 0 = 0         → [0,0,0]
+i=1: 0 × 32768 + (0 × 32 + 1) × 256 + 0 = 256       → [0,1,0]
+i=2: 0 × 32768 + (0 × 32 + 2) × 256 + 0 = 512       → [0,2,0]
+...
+i=31: 0 × 32768 + (0 × 32 + 31) × 256 + 0 = 7936    → [0,31,0]
+```
+
+第 0 个元素到第 31 个元素，地址增量是 256 (post_axis_size)，所以**步长为 256 个元素**。这意味着每次加载 `i` 和 `i+1` 之间有 `256 × 4 = 1024 字节` 的跨度 — **非合并访问**。
+
+### Kernel C: `quantize_mx_cuda_kernel` (预计算 max 路径)
+
+```
+例: shape=[3, 128, 256], axis=1
+
+线程映射: 1 线程 / 元素
+  total_size = 3 × 128 × 256 = 98304
+  blocks = ceil(98304/1024) = 96
+  threads = 1024
+
+  线程 offset=0:     idx=0      → [0,0,0]
+  线程 offset=256:   idx=256    → [0,1,0]
+  线程 offset=32768: idx=32768  → [1,0,0]
+
+  max_values 查找:
+    post_axis_i = offset % 256
+    pre_axis_i  = offset / (256 × 128)
+    m_i = pre_axis_i × 256 + post_axis_i
+
+    例如 offset=0:
+      post_axis_i=0, pre_axis_i=0, m_i=0 → max_values[0,0] = tile [0,:,0] 的 max
+    例如 offset=256:
+      post_axis_i=0, pre_axis_i=0, m_i=0 → 同一个 tile! 相同 max
+    例如 offset=1:
+      post_axis_i=1, pre_axis_i=0, m_i=1 → tile [0,:,1] 的 max
+```
+
+每个线程独立查找对应的 max_value。同属一个 tile 的所有 `axis_size` 个元素 (此处 128 个) 映射到同一个 m_i。
+
+---
+
+## 12. max_values 内存布局
+
+`quantize_mx_func_cuda` 路径需要在 Python 侧预计算 max_values:
+
+```python
+# mx_ops.py:247
+max_values = A.abs().max(dim=axis, keepdim=True).values
+```
+
+对 `shape=[3, 128, 256]`, `axis=1`:
+
+```
+max_values shape: [3, 1, 256]   (keepdim=True, dim 1 被压缩为 size 1)
+
+内存布局 (row-major):
+  [0,0,0] [0,0,1] ... [0,0,255] [1,0,0] ... [1,0,255] [2,0,0] ... [2,0,255]
+  ↑ tile [0,:,0] 的 max          ↑ tile [1,:,0] 的 max
+```
+
+kernel 中 `m_i = pre_axis_i × post_axis_size + post_axis_i`:
+
+```
+m_i=0:   pre=0, post=0 → max_values flat offset 0 → max_values[0,0,0] = tile [0,:,0] max
+m_i=255: pre=0, post=255 → offset 255 → max_values[0,0,255] = tile [0,:,255] max
+m_i=256: pre=1, post=0 → offset 256 → max_values[1,0,0] = tile [1,:,0] max
+```
+
+`keepdim=True` 产生的 size-1 维度在 flat 索引中不产生任何影响，kernel 的 flat 索引逻辑完全正确。
+
+**形状关系总结**:
+
+```
+input shape:   [pre, axis, post]  (逻辑上的三维分解)
+max_values shape (逻辑): [pre, 1, post]  即 [pre_axis_size, 1, post_axis_size]
+max_values shape (flat): [pre_axis_size × post_axis_size]
+```
+
+---
+
+## 13. 三种路径的内存模式对比
+
+
+|                | 快速路径 (innermost)    | 通用路径 (by_tile)      | 预计算 max 路径        |
+| -------------- | ------------------- | ------------------- | ----------------- |
+| **线程/元素比**     | 1:1 (1 线程/元素)       | 1:tile_size         | 1:1               |
+| **max 求值方式**   | warp allreduce 寄存器  | 线程内串行循环             | 预先 kernel 算好      |
+| **tile 内内存访问** | **连续 (coalesced)**  | 步长 `post_axis_size` | 连续 (1 个元素)        |
+| **额外内存**       | 无                   | 无                   | max_values tensor |
+| **tile 大小限制**  | ≤ 32, 2 的幂          | 任意                  | 任意                |
+| **适用场景**       | axis=-1, small tile | 任意 axis             | 需要复用 max_values 时 |
+
+
+**快速路径在 PCIe 上的优势图解** (shape=[4, 12], tile=4):
+
+```
+warp 0 的一次内存事务:
+  thread 0..3 请求 offset 0,1,2,3
+  GPU 内存控制器: 一次 128 字节事务读取 cacheline → 包含所有 4 个 float ✓
+
+通用路径:
+  线程 0 请求 offset 0, 256, 512, 768  (步长 256)
+  GPU 内存控制器: 需要 4 次独立 cacheline 读取 ✗
+```
+
+---
+
+## 14. 完整数据流 (Python → CUDA)
+
+```
+Python: mx_ops.py:_quantize_mx
+  │
+  ├─ 路径 A: 单 axis + (block_size≤32 或 axis 非 innermost)
+  │    │  A.contiguous() 确保连续
+  │    │
+  │    └─ quantize_mx_by_tile_func_cuda (funcs.cpp)
+  │         │  传入原始 tensor, 不 reshape
+  │         │
+  │         └─ quantize_mx_by_tile_cuda (mx.cu)
+  │              │  pre_axis_size, axis_size, post_axis_size, num_tiles 计算
+  │              │
+  │              ├─ 快速路径: quantize_mx_innermost_cuda_kernel (mx.cuh)
+  │              │   1 线程/元素, warp allreduce, 连续内存
+  │              │
+  │              └─ 通用路径: quantize_mx_by_tile_cuda_kernel (mx.cuh)
+  │                  1 线程/tile, 串行遍历, 步长 post_axis_size
+  │
+  └─ 路径 B: Python 侧 reshape + 预计算 max
+       │  _reshape_to_blocks 添加 tile 维度 + padding
+       │  max_values = A.abs().max(dim=axis, keepdim=True)
+       │
+       └─ quantize_mx_func_cuda (mx.cu)
+            └─ quantize_mx_cuda_kernel (mx.cuh)
+                1 线程/元素, 从 max_values 查共用指数
+```
+
