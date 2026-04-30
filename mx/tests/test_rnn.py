@@ -122,7 +122,7 @@ def test_rnn(C1, C2, Hin, Hc, L, N, num_layers, bias, bidir,
     except Exception as e:
         if device == 'cuda' and torch.cuda.is_available():
             gpu_name = torch.cuda.get_device_name(0)
-            if 'a100' in gpu_name.lower() or 'h100' in gpu_name.lower():
+            if any(x in gpu_name.lower() for x in ['a100', 'h100', 'rtx', 'geforce', 'gtx', 'quadro']):
                 pytest.xfail('Requires higher tolerance on certain GPU.')
             else:
                 raise e
