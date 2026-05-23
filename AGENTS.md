@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **microxcaling** (1479 symbols, 2914 relationships, 128 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **microxcaling** (1861 symbols, 3600 relationships, 161 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -39,5 +39,9 @@ This project is indexed by GitNexus as **microxcaling** (1479 symbols, 2914 rela
 | Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
 | Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+| Work in the Mx area (162 symbols) | `.claude/skills/generated/mx/SKILL.md` |
+| Work in the Tests area (90 symbols) | `.claude/skills/generated/tests/SKILL.md` |
+| Work in the Cuda_demo area (27 symbols) | `.claude/skills/generated/cuda-demo/SKILL.md` |
+| Work in the Cpp area (10 symbols) | `.claude/skills/generated/cpp/SKILL.md` |
 
 <!-- gitnexus:end -->
