@@ -2,7 +2,7 @@
 这是一个使用 Microscaling (MX) 量化技术的 FFN (Feed-Forward Network) 手动示例脚本。
 与 ffn_mx_auto.py 不同，此脚本手动导入并使用 MX 库的特定模块（如 Linear、LayerNorm、gelu 等），
 并显式传递 mx_specs 参数，实现 FP6 等低精度量化。
-支持 SIMD 操作（如 simd_split、simd_add）优化残差连接。
+支持 SIMD 操作 如 simd_split、simd_add 优化残差连接。
 通过命令行参数配置 MX 规格，支持自定义 CUDA 等。
 不修改原有代码逻辑，仅添加详细注释解释每个部分。
 """
