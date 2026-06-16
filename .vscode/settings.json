@@ -1,3 +1,10 @@
 {
-    "python.languageServer": "None"
+    "python.languageServer": "None",
+    "clangd.path": "/usr/bin/clangd",
+    "clangd.fallbackFlags": [
+        "-std=c++17"
+    ],
+    "code-runner.executorMap": {
+        "cpp": "cd $dir && /usr/bin/clang++ -std=c++17 -Wall -Wextra \"$fileName\" -o \"$fileNameWithoutExt.out\" && \"$dir/$fileNameWithoutExt.out\""
+    }
 }

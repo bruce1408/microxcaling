@@ -321,7 +321,7 @@ static uint32_t float_to_fp24(float val) {
         biased = 0x3F;
         frac = 0.0f;
     }
-
+    
     // normal fp24 mantissa：
     //   frac 在 [0.5, 1)，2*frac 在 [1, 2)。
     //   mant = (2*frac - 1) * 2^17。
